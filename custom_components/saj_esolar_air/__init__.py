@@ -128,7 +128,8 @@ class ESolarCoordinator(DataUpdateCoordinator[ESolarResponse]):
 
     def __init__(self, hass: HomeAssistant, entry: ConfigEntry) -> None:
         """Initialize the coordinator."""
-        update_interval = timedelta(seconds=_get_update_interval_seconds(entry))
+        self._configured_interval_seconds = _get_update_interval_seconds(entry)
+        update_interval = timedelta(seconds=self._configured_interval_seconds)
         super().__init__(
             hass,
             _LOGGER,
@@ -156,7 +157,41 @@ class ESolarCoordinator(DataUpdateCoordinator[ESolarResponse]):
         except Exception as err:  # pylint: disable=broad-except
             raise UpdateFailed(f"Unexpected update error: {err}") from err
 
+        self._apply_dynamic_interval(data)
         return data
+
+    def _apply_dynamic_interval(self, data: ESolarResponse) -> None:
+        """Adapt poll interval for entries still using a very high default value."""
+        configured = self._configured_interval_seconds
+        if configured != 600:
+            return
+
+        refresh_candidates: list[int] = []
+        for plant in data.get("plantList", []):
+            if not isinstance(plant, dict):
+                continue
+            try:
+                refresh = int(plant.get("refreshInterval"))
+            except (TypeError, ValueError):
+                continue
+            if refresh > 0:
+                refresh_candidates.append(refresh)
+
+        if not refresh_candidates:
+            return
+
+        api_refresh = min(refresh_candidates)
+        # Avoid API hammering while still providing near-live updates.
+        recommended = max(10, api_refresh)
+        target = min(configured, recommended)
+        target_td = timedelta(seconds=target)
+        if self.update_interval != target_td:
+            _LOGGER.debug(
+                "Adjust polling interval from %ss to %ss based on API refresh interval",
+                configured,
+                target,
+            )
+            self.update_interval = target_td
 
 class ESolarError(HomeAssistantError):
     """Base error."""

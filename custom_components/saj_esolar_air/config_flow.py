@@ -322,12 +322,7 @@ class OptionsFlowHandler(config_entries.OptionsFlow):
 
     def __init__(self, config_entry: config_entries.ConfigEntry) -> None:
         """Initialize options flow."""
-        # Home Assistant has changed the OptionsFlow base constructor
-        # signature across versions. Keep compatibility with both variants.
-        try:
-            super().__init__(config_entry)
-        except TypeError:
-            super().__init__()
+        # Keep constructor simple and HA-version agnostic.
         self.config_entry = config_entry
 
 
@@ -336,14 +331,22 @@ class OptionsFlowHandler(config_entries.OptionsFlow):
     ) -> FlowResult:
         """Manage the options."""
         if user_input is not None:
+            monitored_sites = self.config_entry.options.get(CONF_MONITORED_SITES)
+            if monitored_sites is None:
+                monitored_sites = self.config_entry.data.get(CONF_MONITORED_SITES, [])
             user_input.update(
                 {
-                    CONF_MONITORED_SITES: self.config_entry.options.get(
-                        CONF_MONITORED_SITES
-                    )
+                    CONF_MONITORED_SITES: monitored_sites
                 }
             )
             return self.async_create_entry(title=CONF_TITLE, data=user_input)
+
+        inverter_sensors = self.config_entry.options.get(CONF_INVERTER_SENSORS)
+        pv_grid_data = self.config_entry.options.get(CONF_PV_GRID_DATA)
+        if inverter_sensors is None:
+            inverter_sensors = False
+        if pv_grid_data is None:
+            pv_grid_data = False
 
         return self.async_show_form(
             step_id="init",
@@ -351,11 +354,11 @@ class OptionsFlowHandler(config_entries.OptionsFlow):
                 {
                     vol.Required(
                         CONF_INVERTER_SENSORS,
-                        default=self.config_entry.options.get(CONF_INVERTER_SENSORS),
+                        default=bool(inverter_sensors),
                     ): bool,
                     vol.Required(
                         CONF_PV_GRID_DATA,
-                        default=self.config_entry.options.get(CONF_PV_GRID_DATA),
+                        default=bool(pv_grid_data),
                     ): bool,
                     vol.Required(
                         CONF_PLANT_UPDATE_INTERVAL,

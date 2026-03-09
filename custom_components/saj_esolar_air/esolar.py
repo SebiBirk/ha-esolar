@@ -25,6 +25,18 @@ if BASIC_TEST:
     )
 
 
+def _run_optional_fetch(label: str, func, region, session, plant_info, *args):
+    """Run a non-critical endpoint and continue on failure."""
+    try:
+        func(region, session, plant_info, *args)
+    except requests.exceptions.RequestException as err:
+        _LOGGER.warning("Optional fetch failed (%s): %s", label, err)
+    except ValueError as err:
+        _LOGGER.warning("Optional fetch failed (%s): %s", label, err)
+    except Exception as err:  # pylint: disable=broad-except
+        _LOGGER.warning("Optional fetch failed (%s): %s", label, err)
+
+
 def base_url(region):
     """SAJ eSolar Helper Function - Returns the base URL for the region."""
     if region == "eu":
@@ -75,16 +87,16 @@ def get_esolar_data(region, username, password, plant_list=None, use_pv_grid_att
                 f"We have plant data for {username}/{plant_list}, using cached data"
             )
 
-        web_get_plant_details(region, session, plant_info)
-        web_get_device_list(region, session, plant_info)
-        web_get_sec_statistics(region, session, plant_info)
-        web_get_plant_statistics(region, session, plant_info)
-        web_get_plant_overview(region, session, plant_info)
-        web_get_device_info(region, session, plant_info)
-        web_get_plant_flow_data(region, session, plant_info)
-        web_get_device_raw_data(region, session, plant_info)
-        web_get_alarm_list(region, session, plant_info, 1)
-        web_get_alarm_list(region, session, plant_info, 3)
+        _run_optional_fetch("plant_details", web_get_plant_details, region, session, plant_info)
+        _run_optional_fetch("device_list", web_get_device_list, region, session, plant_info)
+        _run_optional_fetch("sec_statistics", web_get_sec_statistics, region, session, plant_info)
+        _run_optional_fetch("plant_statistics", web_get_plant_statistics, region, session, plant_info)
+        _run_optional_fetch("plant_overview", web_get_plant_overview, region, session, plant_info)
+        _run_optional_fetch("device_info", web_get_device_info, region, session, plant_info)
+        _run_optional_fetch("plant_flow_data", web_get_plant_flow_data, region, session, plant_info)
+        _run_optional_fetch("device_raw_data", web_get_device_raw_data, region, session, plant_info)
+        _run_optional_fetch("alarm_list_open", web_get_alarm_list, region, session, plant_info, 1)
+        _run_optional_fetch("alarm_list_closed", web_get_alarm_list, region, session, plant_info, 3)
 
         for plant in plant_info["plantList"]:
             try:
@@ -101,8 +113,8 @@ def get_esolar_data(region, username, password, plant_list=None, use_pv_grid_att
                 _LOGGER.error(
                     f"We don't have a battery for {username}: {e}"
                 )
-        web_get_batteries_data(region, session, plant_info)
-        web_get_device_battery_data(region, session, plant_info)
+        _run_optional_fetch("batteries_data", web_get_batteries_data, region, session, plant_info)
+        _run_optional_fetch("device_battery_data", web_get_device_battery_data, region, session, plant_info)
 
         plant_info['status'] = 'success'
         plant_info['stamp'] = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
