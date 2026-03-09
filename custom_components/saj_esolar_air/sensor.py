@@ -4,6 +4,7 @@ import datetime
 from datetime import timedelta, datetime
 import pytz
 import logging
+from typing import Any, Callable
 from .elekeeper import extract_number, split_camel_case, extract_date
 from homeassistant.components.sensor import (
     SensorDeviceClass,
@@ -18,6 +19,7 @@ from homeassistant.const import (
     UnitOfElectricPotential,
     UnitOfElectricCurrent,
     UnitOfTemperature,
+    UnitOfTime,
     EntityCategory,
 )
 from homeassistant.core import HomeAssistant, callback
@@ -106,6 +108,136 @@ _LOGGER = logging.getLogger(__name__)
 def is_float_and_not_int(num):
     return isinstance(num, float) and not isinstance(num, int)
 
+
+def _parse_float(value: Any, _: dict[str, Any]) -> float | None:
+    if value in (None, "", "--"):
+        return None
+    try:
+        return float(value)
+    except (TypeError, ValueError):
+        return None
+
+
+def _parse_int(value: Any, _: dict[str, Any]) -> int | None:
+    if value in (None, "", "--"):
+        return None
+    try:
+        return int(value)
+    except (TypeError, ValueError):
+        return None
+
+
+def _parse_text(value: Any, _: dict[str, Any]) -> str | None:
+    if value in (None, ""):
+        return None
+    return str(value)
+
+
+LivePlantParser = Callable[[Any, dict[str, Any]], Any]
+
+PLANT_LIVE_NUMERIC_SENSOR_DEFINITIONS: tuple[dict[str, Any], ...] = (
+    {
+        "key": "totalPvPower",
+        "label": "PV Power",
+        "unit": UnitOfPower.WATT,
+        "device_class": SensorDeviceClass.POWER,
+        "icon": ICON_PANEL,
+    },
+    {
+        "key": "totalLoadPowerwatt",
+        "label": "Load Power",
+        "unit": UnitOfPower.WATT,
+        "device_class": SensorDeviceClass.POWER,
+        "icon": ICON_SOCKET,
+    },
+    {
+        "key": "sysGridPowerwatt",
+        "label": "Grid Power",
+        "unit": UnitOfPower.WATT,
+        "device_class": SensorDeviceClass.POWER,
+        "icon": ICON_GRID,
+    },
+    {
+        "key": "batPower",
+        "label": "Battery Power",
+        "unit": UnitOfPower.WATT,
+        "device_class": SensorDeviceClass.POWER,
+        "icon": ICON_POWER,
+    },
+    {
+        "key": "backUpLoadPowerwatt",
+        "label": "Backup Load Power",
+        "unit": UnitOfPower.WATT,
+        "device_class": SensorDeviceClass.POWER,
+        "icon": ICON_SOCKET,
+    },
+    {
+        "key": "smartLoadPowerwatt",
+        "label": "Smart Load Power",
+        "unit": UnitOfPower.WATT,
+        "device_class": SensorDeviceClass.POWER,
+        "icon": ICON_SOCKET,
+    },
+    {
+        "key": "chargePower",
+        "label": "Charger Power",
+        "unit": UnitOfPower.WATT,
+        "device_class": SensorDeviceClass.POWER,
+        "icon": ICON_POWER,
+    },
+    {
+        "key": "microPowerWatt",
+        "label": "Micro Power",
+        "unit": UnitOfPower.WATT,
+        "device_class": SensorDeviceClass.POWER,
+        "icon": ICON_PANEL,
+    },
+    {
+        "key": "genPowerwatt",
+        "label": "Generator Power",
+        "unit": UnitOfPower.WATT,
+        "device_class": SensorDeviceClass.POWER,
+        "icon": ICON_POWER,
+    },
+    {
+        "key": "batEnergyPercent",
+        "label": "Battery SOC",
+        "unit": PERCENTAGE,
+        "device_class": SensorDeviceClass.BATTERY,
+        "icon": ICON_METER,
+    },
+    {
+        "key": "pvEfficiency",
+        "label": "PV Efficiency",
+        "unit": PERCENTAGE,
+        "icon": ICON_METER,
+    },
+    {
+        "key": "refreshInterval",
+        "label": "API Refresh Interval",
+        "unit": UnitOfTime.SECONDS,
+        "icon": ICON_UPDATE,
+        "entity_category": EntityCategory.DIAGNOSTIC,
+        "parser": _parse_int,
+    },
+    {
+        "key": "userMode",
+        "label": "User Mode Id",
+        "icon": ICON_UPDATE,
+        "entity_category": EntityCategory.DIAGNOSTIC,
+        "parser": _parse_int,
+        "state_class": None,
+    },
+)
+
+PLANT_LIVE_TEXT_SENSOR_DEFINITIONS: tuple[dict[str, Any], ...] = (
+    {
+        "key": "userModeName",
+        "label": "User Mode",
+        "icon": ICON_UPDATE,
+    },
+)
+
 async def async_setup_entry(
     hass: HomeAssistant, entry: ConfigEntry, async_add_entities: AddEntitiesCallback
 ) -> None:
@@ -165,6 +297,35 @@ async def async_setup_entry(
             plant_entities.append(
                 ESolarSensorPlantTodayEquivalentHours( coordinator, plant["plantName"], plant["plantUid"] )
             )
+            for live_sensor in PLANT_LIVE_NUMERIC_SENSOR_DEFINITIONS:
+                plant_entities.append(
+                    ESolarSensorPlantLiveValue(
+                        coordinator,
+                        plant["plantName"],
+                        plant["plantUid"],
+                        source=live_sensor["key"],
+                        label=live_sensor["label"],
+                        parser=live_sensor.get("parser", _parse_float),
+                        native_unit_of_measurement=live_sensor.get("unit"),
+                        device_class=live_sensor.get("device_class"),
+                        state_class=live_sensor.get("state_class", SensorStateClass.MEASUREMENT),
+                        icon=live_sensor.get("icon"),
+                        entity_category=live_sensor.get("entity_category"),
+                    )
+                )
+            for live_sensor in PLANT_LIVE_TEXT_SENSOR_DEFINITIONS:
+                plant_entities.append(
+                    ESolarSensorPlantLiveValue(
+                        coordinator,
+                        plant["plantName"],
+                        plant["plantUid"],
+                        source=live_sensor["key"],
+                        label=live_sensor["label"],
+                        parser=live_sensor.get("parser", _parse_text),
+                        icon=live_sensor.get("icon"),
+                        entity_category=live_sensor.get("entity_category"),
+                    )
+                )
 
 
             if plant["type"] in [1,3] and (("hasBattery" in plant and plant["hasBattery"] == 1) or "hasBattery" not in plant):
@@ -997,6 +1158,61 @@ class ESolarSensorPlantTodayEquivalentHours(ESolarPlant):
                         if "todayEquivalentHours" in device and device["todayEquivalentHours"] is not None and float(device["todayEquivalentHours"]) > 0.0:
                             total_hours += float(device["todayEquivalentHours"])
                     self._attr_native_value = total_hours
+
+
+class ESolarSensorPlantLiveValue(ESolarPlant):
+    """Representation of a plant live value from getDeviceEneryFlowData."""
+
+    def __init__(
+        self,
+        coordinator: ESolarCoordinator,
+        plant_name,
+        plant_uid,
+        source: str,
+        label: str,
+        parser: LivePlantParser,
+        native_unit_of_measurement=None,
+        device_class=None,
+        state_class=None,
+        icon=None,
+        entity_category=None,
+    ) -> None:
+        """Initialize the sensor."""
+        super().__init__(
+            coordinator=coordinator, plant_name=plant_name, plant_uid=plant_uid
+        )
+        self._source = source
+        self._parser = parser
+        self._attr_available = False
+        self._attr_unique_id = f"plantUid_{plant_uid}_live_{source}"
+        self._attr_name = f"Plant {self._plant_name} Live {label}"
+        self._attr_native_value = None
+
+        if native_unit_of_measurement is not None:
+            self._attr_native_unit_of_measurement = native_unit_of_measurement
+        if device_class is not None:
+            self._attr_device_class = device_class
+        if state_class is not None:
+            self._attr_state_class = state_class
+        if icon is not None:
+            self._attr_icon = icon
+        if entity_category is not None:
+            self._attr_entity_category = entity_category
+
+    def process_data(self):
+        for plant in self._coordinator.data["plantList"]:
+            if plant["plantName"] != self._plant_name:
+                continue
+
+            parsed_value = None
+            try:
+                parsed_value = self._parser(plant.get(self._source), plant)
+            except (TypeError, ValueError):
+                parsed_value = None
+
+            self._attr_native_value = parsed_value
+            self._attr_available = parsed_value is not None
+            return
 
 
 class ESolarSensorInverterPeakPower(ESolarDevice):

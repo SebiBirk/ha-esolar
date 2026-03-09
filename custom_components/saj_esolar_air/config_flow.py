@@ -2,7 +2,6 @@
 from __future__ import annotations
 
 import logging
-from email.policy import default
 from typing import Any
 
 import requests
@@ -22,16 +21,37 @@ from .const import (
     CONF_PV_GRID_DATA,
     DOMAIN,
     CONF_PLANT_UPDATE_INTERVAL,
-    CONF_REGION,
+    CONF_UPDATE_INTERVAL,
     CONF_REGION_EU,
     CONF_REGION_IN,
-    CONF_REGION_CN
+    CONF_REGION_CN,
 )
 from .esolar import esolar_web_autenticate, web_get_plant
 
 CONF_TITLE = "SAJ eSolar"
+DEFAULT_PLANT_UPDATE_INTERVAL_SECONDS = 600
 
 _LOGGER = logging.getLogger(__name__)
+
+
+def _coerce_positive_int(value: Any, default: int) -> int:
+    """Return a positive int, otherwise a sane fallback."""
+    try:
+        return max(1, int(value))
+    except (TypeError, ValueError):
+        return default
+
+
+def _current_update_interval_seconds(config_entry: config_entries.ConfigEntry) -> int:
+    """Return interval in seconds, handling pre-v3 entries with minute values."""
+    raw_value = config_entry.options.get(CONF_PLANT_UPDATE_INTERVAL)
+    if raw_value is None:
+        return CONF_UPDATE_INTERVAL
+
+    value = _coerce_positive_int(raw_value, CONF_UPDATE_INTERVAL)
+    if config_entry.version <= 2:
+        return value * 60
+    return value
 
 STEP_USER_DATA_SCHEMA = vol.Schema(
     {
@@ -93,7 +113,7 @@ async def validate_input(hass: HomeAssistant, data: dict[str, Any]) -> dict[str,
 class ConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
     """Handle a config flow for eSolar."""
 
-    VERSION = 2
+    VERSION = 3
 
     def __init__(self):
         """Set up the the config flow."""
@@ -130,7 +150,7 @@ class ConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
                         CONF_MONITORED_SITES: self.sites,
                         CONF_INVERTER_SENSORS: False,
                         CONF_PV_GRID_DATA: False,
-                        CONF_PLANT_UPDATE_INTERVAL: 10
+                        CONF_PLANT_UPDATE_INTERVAL: DEFAULT_PLANT_UPDATE_INTERVAL_SECONDS,
                     },
                 )
 
@@ -152,7 +172,7 @@ class ConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
             if len(user_input[CONF_MONITORED_SITES]) > 0:
                 user_input.update({CONF_INVERTER_SENSORS: False})
                 user_input.update({CONF_PV_GRID_DATA: False})
-                user_input.update({CONF_PLANT_UPDATE_INTERVAL: 10})
+                user_input.update({CONF_PLANT_UPDATE_INTERVAL: DEFAULT_PLANT_UPDATE_INTERVAL_SECONDS})
                 return self.async_create_entry(
                     title=CONF_TITLE, data=self.data, options=user_input
                 )
@@ -180,7 +200,13 @@ class ConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
             if len(user_input[CONF_MONITORED_SITES]) > 0:
                 user_input.update({CONF_INVERTER_SENSORS: self._get_reconfigure_entry().options.get(CONF_INVERTER_SENSORS)})
                 user_input.update({CONF_PV_GRID_DATA: self._get_reconfigure_entry().options.get(CONF_PV_GRID_DATA)})
-                user_input.update({CONF_PLANT_UPDATE_INTERVAL: self._get_reconfigure_entry().options.get(CONF_PLANT_UPDATE_INTERVAL)})
+                user_input.update(
+                    {
+                        CONF_PLANT_UPDATE_INTERVAL: _current_update_interval_seconds(
+                            self._get_reconfigure_entry()
+                        )
+                    }
+                )
 
                 _LOGGER.debug(
                     f"Reconfigure: Store data in hass. {self.data}"
@@ -238,7 +264,9 @@ class ConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
                         CONF_MONITORED_SITES: self.sites,
                         CONF_INVERTER_SENSORS: self._get_reconfigure_entry().options.get(CONF_INVERTER_SENSORS),
                         CONF_PV_GRID_DATA: self._get_reconfigure_entry().options.get(CONF_PV_GRID_DATA),
-                        CONF_PLANT_UPDATE_INTERVAL: self._get_reconfigure_entry().options.get(CONF_PLANT_UPDATE_INTERVAL),
+                        CONF_PLANT_UPDATE_INTERVAL: _current_update_interval_seconds(
+                            self._get_reconfigure_entry()
+                        ),
                     },
                     reload_even_if_entry_is_unchanged=False,
                 )
@@ -262,6 +290,7 @@ class OptionsFlowHandler(config_entries.OptionsFlow):
 
     def __init__(self, config_entry: config_entries.ConfigEntry) -> None:
         """Initialize options flow."""
+        self.config_entry = config_entry
 
 
     async def async_step_init(
@@ -292,8 +321,8 @@ class OptionsFlowHandler(config_entries.OptionsFlow):
                     ): bool,
                     vol.Required(
                         CONF_PLANT_UPDATE_INTERVAL,
-                        default=self.config_entry.options.get(CONF_PLANT_UPDATE_INTERVAL),
-                    ): int,
+                        default=_current_update_interval_seconds(self.config_entry),
+                    ): vol.All(vol.Coerce(int), vol.Range(min=1)),
                 }
             ),
         )

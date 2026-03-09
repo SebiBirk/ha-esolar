@@ -60,7 +60,7 @@
         "data": {
           "show_inverter_sensors": "Wechselrichtersensoren anzeigen",
           "show_pv_grid_data": "Photovoltaik- und Netzeigenschaften anzeigen",
-          "plant_update_interval": "Aktualisierungsintervall der Anlage (Minuten)"
+          "plant_update_interval": "Aktualisierungsintervall der Anlage (Sekunden)"
         },
         "description": "Optionen auswählen",
         "title": "SAJ eSolar"

@@ -61,7 +61,7 @@
         "data": {
           "show_inverter_sensors": "Show inverter sensors",
           "show_pv_grid_data": "Show Photovoltaics and Grid attributes",
-          "plant_update_interval": "Plant update interval (minutes)"
+          "plant_update_interval": "Plant update interval (seconds)"
         },
         "description": "Select options",
         "title": "[%key::component::saj_esolar_air::config::step::user::title%]"

@@ -13,7 +13,14 @@ from homeassistant.core import HomeAssistant
 from homeassistant.exceptions import ConfigEntryAuthFailed, HomeAssistantError
 from homeassistant.helpers.update_coordinator import DataUpdateCoordinator, UpdateFailed
 
-from .const import CONF_MONITORED_SITES, CONF_PV_GRID_DATA, CONF_UPDATE_INTERVAL, DOMAIN, CONF_PLANT_UPDATE_INTERVAL
+from .const import (
+    CONF_MONITORED_SITES,
+    CONF_PV_GRID_DATA,
+    CONF_UPDATE_INTERVAL,
+    DOMAIN,
+    CONF_PLANT_UPDATE_INTERVAL,
+    LEGACY_CONF_UPDATE_INTERVAL_MINUTES,
+)
 from .esolar import get_esolar_data
 
 _LOGGER = logging.getLogger(__name__)
@@ -28,7 +35,8 @@ class ESolarResponse(TypedDict):
 
 async def update_listener(hass, entry):
     """Handle options update."""
-    _LOGGER.debug(entry.options)
+    _LOGGER.debug("Options updated for %s: %s", entry.entry_id, entry.options)
+    await hass.config_entries.async_reload(entry.entry_id)
 
 
 async def async_migrate_entry(hass, entry):
@@ -38,14 +46,49 @@ async def async_migrate_entry(hass, entry):
         f"Checking migration. Version {entry.version}"
     )
 
-    if entry.version == 1:
+    current_version = entry.version
+    legacy_minutes_fallback = LEGACY_CONF_UPDATE_INTERVAL_MINUTES
+
+    if current_version == 1:
         new_fields = {
             CONF_REGION: "eu",
             CONF_PLANT_UPDATE_INTERVAL: 10
         }
         new_data = {**entry.data, **new_fields}  # Új mezők hozzáadása
         hass.config_entries.async_update_entry(entry, data=new_data, version=2)
+        legacy_minutes_fallback = new_fields[CONF_PLANT_UPDATE_INTERVAL]
+        current_version = 2
+
+    if current_version == 2:
+        legacy_interval_minutes = entry.options.get(
+            CONF_PLANT_UPDATE_INTERVAL,
+            entry.data.get(CONF_PLANT_UPDATE_INTERVAL, legacy_minutes_fallback),
+        )
+        try:
+            update_interval_seconds = max(1, int(legacy_interval_minutes)) * 60
+        except (TypeError, ValueError):
+            update_interval_seconds = CONF_UPDATE_INTERVAL
+
+        new_options = dict(entry.options)
+        new_options[CONF_PLANT_UPDATE_INTERVAL] = update_interval_seconds
+        hass.config_entries.async_update_entry(entry, options=new_options, version=3)
     return True
+
+
+def _get_update_interval_seconds(entry: ConfigEntry) -> int:
+    """Return configured polling interval in seconds with a safe fallback."""
+    configured = entry.options.get(CONF_PLANT_UPDATE_INTERVAL)
+    if configured is None and CONF_PLANT_UPDATE_INTERVAL in entry.data:
+        # Legacy versions stored this as minutes in entry.data.
+        try:
+            return max(1, int(entry.data[CONF_PLANT_UPDATE_INTERVAL])) * 60
+        except (TypeError, ValueError):
+            return CONF_UPDATE_INTERVAL
+
+    try:
+        return max(1, int(configured))
+    except (TypeError, ValueError):
+        return CONF_UPDATE_INTERVAL
 
 async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     """Beállítja az integrációt a konfigurációs bejegyzés alapján."""
@@ -54,6 +97,9 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
             f"Migration failed"
         )
         return False  # Sikertelen migráció esetén ne folytassa
+    migrated_entry = hass.config_entries.async_get_entry(entry.entry_id)
+    if migrated_entry is not None:
+        entry = migrated_entry
 
     """Set up eSolar from a config entry."""
     coordinator = ESolarCoordinator(hass, entry)
@@ -82,7 +128,7 @@ class ESolarCoordinator(DataUpdateCoordinator[ESolarResponse]):
 
     def __init__(self, hass: HomeAssistant, entry: ConfigEntry) -> None:
         """Initialize the coordinator."""
-        update_interval = timedelta(minutes=(entry.options.get(CONF_PLANT_UPDATE_INTERVAL) or CONF_UPDATE_INTERVAL))
+        update_interval = timedelta(seconds=_get_update_interval_seconds(entry))
         super().__init__(
             hass,
             _LOGGER,
@@ -173,3 +219,4 @@ def get_data(
             _LOGGER.exception("Unexpected response: %s", plant_info)
             raise UnknownError
     return cast(ESolarResponse, plant_info)
+

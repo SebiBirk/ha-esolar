@@ -7,7 +7,9 @@ CONF_REGION = "region"
 CONF_REGION_EU = "eu"
 CONF_REGION_IN = "in"
 CONF_REGION_CN = "cn"
-CONF_UPDATE_INTERVAL = 5
+# Polling interval fallback (in seconds).
+CONF_UPDATE_INTERVAL = 300
+LEGACY_CONF_UPDATE_INTERVAL_MINUTES = 5
 ATTRIBUTION = "Data provided by SAJ elekeeper"
 MANUFACTURER = "SAJ"
 
