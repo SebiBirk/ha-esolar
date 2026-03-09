@@ -228,11 +228,15 @@ def store_user_data(username: str, password: str, token: str|None, expires: int|
         user_data = {}
 
     # Frissítés vagy új bejegyzés létrehozása
+    expires_hrs = None
+    if isinstance(expires, (int, float)):
+        expires_hrs = datetime.datetime.fromtimestamp(expires).strftime("%Y-%m-%d %H:%M:%S")
+
     user_data[username] = {
         "password_hash": password_hash,
         "token": token,
         "expires": expires,
-        "expires_hrs": datetime.datetime.fromtimestamp(expires).strftime("%Y-%m-%d %H:%M:%S"),
+        "expires_hrs": expires_hrs,
         "refresh_token": refresh_token,
         "last_update": datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
     }
@@ -272,7 +276,7 @@ def read_user_data(username: str, password: str, filename="user_data.json"):
 
     # Expiry ellenőrzése: Csak akkor adjuk vissza a tokent, ha még nem járt le
     current_time = int(time.time())
-    if expires > current_time:
+    if isinstance(expires, (int, float)) and expires > current_time:
         return {"token": token, "expires": expires}
 
     if refresh_token is not None:
@@ -752,7 +756,7 @@ def web_get_sec_statistics(region, session, plant_info):
                                 plant["modules"].append(module)
 
                             if "moduleSnList" not in plant:
-                                plant["moduleSnList"] = {}
+                                plant["moduleSnList"] = []
                             if module_sn not in plant["moduleSnList"]:
                                 plant["moduleSnList"].append(module_sn)
 

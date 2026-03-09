@@ -153,6 +153,8 @@ class ESolarCoordinator(DataUpdateCoordinator[ESolarResponse]):
             raise ConfigEntryAuthFailed from err
         except ESolarError as err:
             raise UpdateFailed(str(err)) from err
+        except Exception as err:  # pylint: disable=broad-except
+            raise UpdateFailed(f"Unexpected update error: {err}") from err
 
         return data
 
@@ -193,13 +195,17 @@ def get_data(
         plant_info = get_esolar_data(region, username, password, plants, use_pv_grid_attributes)
 
     except requests.exceptions.HTTPError as errh:
-        raise requests.exceptions.HTTPError(errh)
+        _LOGGER.warning("SAJ API HTTP error: %s", errh)
+        raise UnknownError(f"SAJ API HTTP error: {errh}") from errh
     except requests.exceptions.ConnectionError as errc:
-        raise requests.exceptions.ConnectionError(errc)
+        _LOGGER.warning("SAJ API connection error: %s", errc)
+        raise UnknownError(f"SAJ API connection error: {errc}") from errc
     except requests.exceptions.Timeout as errt:
-        raise requests.exceptions.Timeout(errt)
+        _LOGGER.warning("SAJ API timeout: %s", errt)
+        raise UnknownError(f"SAJ API timeout: {errt}") from errt
     except requests.exceptions.RequestException as errr:
-        raise requests.exceptions.RequestException(errr)
+        _LOGGER.warning("SAJ API request error: %s", errr)
+        raise UnknownError(f"SAJ API request error: {errr}") from errr
     except ValueError as err:
         err_str = str(err)
 
@@ -219,4 +225,3 @@ def get_data(
             _LOGGER.exception("Unexpected response: %s", plant_info)
             raise UnknownError
     return cast(ESolarResponse, plant_info)
-

@@ -135,6 +135,200 @@ def _parse_text(value: Any, _: dict[str, Any]) -> str | None:
 
 LivePlantParser = Callable[[Any, dict[str, Any]], Any]
 
+
+def _to_float(value: Any) -> float | None:
+    if value in (None, "", "--", "N/A"):
+        return None
+    try:
+        return float(value)
+    except (TypeError, ValueError):
+        return None
+
+
+def _iter_device_statistics(plant: dict[str, Any]):
+    for device in plant.get("devices", []):
+        if not isinstance(device, dict):
+            continue
+        stats = device.get("deviceStatisticsData")
+        if isinstance(stats, dict):
+            yield device, stats
+
+
+def _sum_device_values(
+    plant: dict[str, Any],
+    statistics_keys: tuple[str, ...] = (),
+    device_keys: tuple[str, ...] = (),
+) -> float | None:
+    total = 0.0
+    found = False
+    for device, stats in _iter_device_statistics(plant):
+        value = None
+        for key in statistics_keys:
+            value = _to_float(stats.get(key))
+            if value is not None:
+                break
+        if value is None:
+            for key in device_keys:
+                value = _to_float(device.get(key))
+                if value is not None:
+                    break
+        if value is None:
+            continue
+        total += value
+        found = True
+
+    if found:
+        return total
+    return None
+
+
+def _sum_pv_power(plant: dict[str, Any]) -> float | None:
+    total = 0.0
+    found = False
+
+    for _, stats in _iter_device_statistics(plant):
+        pv_list = stats.get("pvList")
+        if not isinstance(pv_list, list):
+            continue
+        for pv_item in pv_list:
+            if not isinstance(pv_item, dict):
+                continue
+            value = _to_float(pv_item.get("pvpower"))
+            if value is None:
+                continue
+            total += value
+            found = True
+
+    if found:
+        return total
+    return None
+
+
+def _sum_backup_load_power(plant: dict[str, Any]) -> float | None:
+    total = 0.0
+    found = False
+
+    for _, stats in _iter_device_statistics(plant):
+        value = _to_float(stats.get("backUptotalLoadPowerwatt"))
+        if value is None:
+            value = _to_float(stats.get("backupTotalLoadPowerWatt"))
+        if value is None:
+            load_po = stats.get("loadPO")
+            if isinstance(load_po, dict):
+                value = _to_float(load_po.get("backupTotalLoadPowerWatt"))
+        if value is None:
+            continue
+        total += value
+        found = True
+
+    if found:
+        return total
+    return None
+
+
+def _weighted_battery_soc(plant: dict[str, Any]) -> float | None:
+    installed = 0.0
+    available = 0.0
+
+    for _, stats in _iter_device_statistics(plant):
+        capacity = None
+        for capacity_key in ("batCapacity", "batCapcity", "batCapicity"):
+            capacity = _to_float(stats.get(capacity_key))
+            if capacity is not None and capacity > 0:
+                break
+            capacity = None
+
+        percentage = _to_float(stats.get("batEnergyPercent"))
+        if capacity is None or percentage is None:
+            continue
+
+        installed += capacity
+        available += capacity * percentage
+
+    if installed > 0:
+        return available / installed
+
+    for device, stats in _iter_device_statistics(plant):
+        percentage = _to_float(stats.get("batEnergyPercent"))
+        if percentage is None:
+            percentage = _to_float(device.get("batEnergyPercent"))
+        if percentage is not None:
+            return percentage
+    return None
+
+
+def _first_device_value(
+    plant: dict[str, Any],
+    keys: tuple[str, ...],
+    parser: LivePlantParser,
+) -> Any:
+    for device, stats in _iter_device_statistics(plant):
+        for container in (device, stats):
+            for key in keys:
+                value = parser(container.get(key), plant)
+                if value is not None:
+                    return value
+    return None
+
+
+def _resolve_live_plant_fallback(source: str, plant: dict[str, Any]) -> Any:
+    if source == "totalPvPower":
+        pv_power = _sum_pv_power(plant)
+        if pv_power is not None:
+            return pv_power
+        return _sum_device_values(
+            plant, statistics_keys=("powerNow",), device_keys=("powerNow",)
+        )
+    if source == "totalLoadPowerwatt":
+        return _sum_device_values(plant, statistics_keys=("totalLoadPowerwatt",))
+    if source == "sysGridPowerwatt":
+        return _sum_device_values(plant, statistics_keys=("sysGridPowerwatt",))
+    if source == "batPower":
+        return _sum_device_values(plant, statistics_keys=("batPower",))
+    if source == "backUpLoadPowerwatt":
+        return _sum_backup_load_power(plant)
+    if source == "smartLoadPowerwatt":
+        return _sum_device_values(plant, statistics_keys=("smartLoadPowerwatt",))
+    if source == "chargePower":
+        return _sum_device_values(plant, statistics_keys=("chargePower",))
+    if source == "microPowerWatt":
+        return _sum_device_values(plant, statistics_keys=("microPowerWatt",))
+    if source == "genPowerwatt":
+        return _sum_device_values(plant, statistics_keys=("genPowerwatt",))
+    if source == "batEnergyPercent":
+        return _weighted_battery_soc(plant)
+    if source == "pvEfficiency":
+        return _first_device_value(plant, ("pvEfficiency",), _parse_float)
+    if source == "refreshInterval":
+        return _first_device_value(plant, ("refreshInterval",), _parse_int)
+    if source == "userMode":
+        return _first_device_value(plant, ("userMode",), _parse_int)
+    if source == "userModeName":
+        return _first_device_value(plant, ("userModeName",), _parse_text)
+    return None
+
+
+def _resolve_plant_energy(
+    plant: dict[str, Any],
+    plant_keys: tuple[str, ...],
+    statistics_keys: tuple[str, ...],
+    device_keys: tuple[str, ...],
+) -> float | None:
+    for key in plant_keys:
+        value = _to_float(plant.get(key))
+        if value is not None and value > 0:
+            return value
+
+    fallback = _sum_device_values(plant, statistics_keys=statistics_keys, device_keys=device_keys)
+    if fallback is not None and fallback > 0:
+        return fallback
+
+    for key in plant_keys:
+        value = _to_float(plant.get(key))
+        if value is not None:
+            return value
+    return fallback
+
 PLANT_LIVE_NUMERIC_SENSOR_DEFINITIONS: tuple[dict[str, Any], ...] = (
     {
         "key": "totalPvPower",
@@ -947,12 +1141,16 @@ class ESolarSensorPlantTotalEnergy(ESolarPlant):
                 self._attr_extra_state_attributes[I_TOTAL] = plant["totalIncome"] if ("totalIncome" in plant and plant["totalIncome"] is not None and plant["totalIncome"] != '--' and float(plant["totalIncome"]) > 0.0 ) else plant["incomeTotal"]
 
                 # Setup state
-                if float(plant["totalPvEnergy"]) > 0.0:
-                    self._attr_native_value = float(plant["totalPvEnergy"])
-                elif  float(plant["totalEnergy"]) > 0.0:
-                    self._attr_native_value = float(plant["totalEnergy"])
-                else:
+                total_energy = _resolve_plant_energy(
+                    plant,
+                    plant_keys=("totalPvEnergy", "totalEnergy"),
+                    statistics_keys=("totalPvEnergy",),
+                    device_keys=("totalEnergy",),
+                )
+                if total_energy is None:
                     self._attr_available = False
+                else:
+                    self._attr_native_value = total_energy
 
 
 class ESolarSensorPlantTodayEnergy(ESolarPlant):
@@ -986,10 +1184,19 @@ class ESolarSensorPlantTodayEnergy(ESolarPlant):
 
                 # Setup static attributes
                 self._attr_available = True
-                self._attr_extra_state_attributes[I_TODAY] = plant["todayIncome"] if ("todayIcome" in plant and plant["todayIncome"] is not None and float(plant["todayIncome"]) > 0) else plant["incomeToday"]
+                self._attr_extra_state_attributes[I_TODAY] = plant["todayIncome"] if ("todayIncome" in plant and plant["todayIncome"] is not None and float(plant["todayIncome"]) > 0) else plant["incomeToday"]
                 self._attr_extra_state_attributes[I_YESTERDAY] = plant["yesterdayIncome"]
                 # Setup state
-                self._attr_native_value = float(plant["todayPvEnergy"])
+                today_energy = _resolve_plant_energy(
+                    plant,
+                    plant_keys=("todayPvEnergy", "todayEnergy"),
+                    statistics_keys=("todayPvEnergy",),
+                    device_keys=("todayEnergy",),
+                )
+                if today_energy is None:
+                    self._attr_available = False
+                else:
+                    self._attr_native_value = today_energy
 
 
 class ESolarSensorPlantMonthEnergy(ESolarPlant):
@@ -1025,7 +1232,16 @@ class ESolarSensorPlantMonthEnergy(ESolarPlant):
                 self._attr_extra_state_attributes[I_MONTH] = plant["incomeMonth"] if ("incomeMonth" in plant and plant["incomeMonth"] is not None and float(plant["incomeMonth"]) > 0) else plant["monthIncome"]
                 self._attr_extra_state_attributes[I_LAST_MONTH] = plant["incomeLastMonth"]
                 # Setup state
-                self._attr_native_value = float(plant["monthPvEnergy"])
+                month_energy = _resolve_plant_energy(
+                    plant,
+                    plant_keys=("monthPvEnergy", "monthEnergy"),
+                    statistics_keys=("monthPvEnergy",),
+                    device_keys=("monthEnergy",),
+                )
+                if month_energy is None:
+                    self._attr_available = False
+                else:
+                    self._attr_native_value = month_energy
 
 
 class ESolarSensorPlantYearEnergy(ESolarPlant):
@@ -1054,7 +1270,16 @@ class ESolarSensorPlantYearEnergy(ESolarPlant):
                 # Setup static attributes
                 self._attr_available = True
                 # Setup state
-                self._attr_native_value = float(plant["yearPvEnergy"])
+                year_energy = _resolve_plant_energy(
+                    plant,
+                    plant_keys=("yearPvEnergy", "yearEnergy"),
+                    statistics_keys=("yearPvEnergy",),
+                    device_keys=("yearEnergy",),
+                )
+                if year_energy is None:
+                    self._attr_available = False
+                else:
+                    self._attr_native_value = year_energy
 
 
 class ESolarSensorPlantPeakPower(ESolarPlant):
@@ -1118,9 +1343,9 @@ class ESolarSensorPlantLastUploadTime(ESolarPlant):
                     self._attr_native_value = extract_date(plant["dataTime"], timezone)
                 elif self._attr_native_value is None and "updateDate" in plant and plant["updateDate"] is not None:
                     self._attr_native_value = extract_date(plant["updateDate"], timezone)
-                elif self._attr_native_value is None and "dataTime" in plant["devices"][0] and plant["devices"][0]["deviceStatisticsData"]["dataTime"] is not None:
+                elif self._attr_native_value is None and "devices" in plant and plant["devices"] is not None and len(plant["devices"]) > 0 and "deviceStatisticsData" in plant["devices"][0] and "dataTime" in plant["devices"][0]["deviceStatisticsData"] and plant["devices"][0]["deviceStatisticsData"]["dataTime"] is not None:
                     self._attr_native_value = extract_date(plant["devices"][0]["deviceStatisticsData"]["dataTime"], timezone)
-                elif self._attr_native_value is None and "updateDate" in plant["devices"][0] and plant["devices"][0]["deviceStatisticsData"]["updateDate"] is not None:
+                elif self._attr_native_value is None and "devices" in plant and plant["devices"] is not None and len(plant["devices"]) > 0 and "deviceStatisticsData" in plant["devices"][0] and "updateDate" in plant["devices"][0]["deviceStatisticsData"] and plant["devices"][0]["deviceStatisticsData"]["updateDate"] is not None:
                     self._attr_native_value = extract_date(plant["devices"][0]["deviceStatisticsData"]["updateDate"], timezone)
 
 
@@ -1209,6 +1434,28 @@ class ESolarSensorPlantLiveValue(ESolarPlant):
                 parsed_value = self._parser(plant.get(self._source), plant)
             except (TypeError, ValueError):
                 parsed_value = None
+
+            fallback_value = _resolve_live_plant_fallback(self._source, plant)
+            prefer_device_value = int(plant.get("queryDeviceDataType", 1)) == 2
+
+            if parsed_value is None and fallback_value is not None:
+                parsed_value = fallback_value
+            elif (
+                prefer_device_value
+                and fallback_value is not None
+                and isinstance(parsed_value, (int, float))
+                and isinstance(fallback_value, (int, float))
+                and parsed_value == 0
+                and fallback_value != 0
+            ):
+                parsed_value = fallback_value
+            elif (
+                prefer_device_value
+                and self._source == "userModeName"
+                and fallback_value is not None
+                and parsed_value in ("", "Dispatch strategy", None)
+            ):
+                parsed_value = fallback_value
 
             self._attr_native_value = parsed_value
             self._attr_available = parsed_value is not None
@@ -2028,10 +2275,16 @@ class ESolarInverterBatterySoC(ESolarDevice):
             #     "storeDevicePower"
             # ]["inputOutputPower"]
 
-            if "outPutDirection" in plant and plant["outPutDirection"] is not None:
-                if plant["outPutDirection"] == 1:
+            output_direction = None
+            if "outputDirection" in plant and plant["outputDirection"] is not None:
+                output_direction = plant["outputDirection"]
+            elif "outPutDirection" in plant and plant["outPutDirection"] is not None:
+                output_direction = plant["outPutDirection"]
+
+            if output_direction is not None:
+                if output_direction == 1:
                     self._attr_extra_state_attributes[IO_DIRECTION] = B_EXPORT
-                elif plant["outPutDirection"] == -1:
+                elif output_direction == -1:
                     self._attr_extra_state_attributes[IO_DIRECTION] = B_IMPORT
                 else:
                     self._attr_extra_state_attributes[IO_DIRECTION] = P_UNKNOWN

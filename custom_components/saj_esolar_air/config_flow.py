@@ -75,13 +75,18 @@ class ESolarHub:
 
     def __init__(self) -> None:
         """Initialize."""
-        self.plant_list: dict[str, Any] = {}
+        self.plant_list: list[dict[str, Any]] = []
 
     def auth_and_get_solar_plants(self, region: str, username: str, password: str) -> bool:
         """Download and list available inverters."""
         try:
             session = esolar_web_autenticate(region, username, password)
-            self.plant_list = web_get_plant(region, session).get("plantList")
+            plants_response = web_get_plant(region, session)
+            plant_list = plants_response.get("plantList") if isinstance(plants_response, dict) else None
+            if not isinstance(plant_list, list):
+                _LOGGER.error("Login: Invalid plant list response: %s", plants_response)
+                return False
+            self.plant_list = [plant for plant in plant_list if isinstance(plant, dict)]
         except requests.exceptions.HTTPError:
             _LOGGER.error("Login: HTTPError")
             return False
@@ -93,6 +98,9 @@ class ESolarHub:
             return False
         except requests.exceptions.RequestException:
             _LOGGER.error("Login: RequestException")
+            return False
+        except Exception:  # pylint: disable=broad-except
+            _LOGGER.exception("Login: Unexpected error during authentication")
             return False
         return True
 
@@ -108,7 +116,7 @@ async def validate_input(hass: HomeAssistant, data: dict[str, Any]) -> dict[str,
         data[CONF_PASSWORD]
     ):
         raise InvalidAuth
-    return {"plant_list": hub.plant_list}
+    return {"plant_list": hub.plant_list if isinstance(hub.plant_list, list) else []}
 
 class ConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
     """Handle a config flow for eSolar."""
@@ -118,8 +126,21 @@ class ConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
     def __init__(self):
         """Set up the the config flow."""
         super().__init__()
-        self.sites = {}
-        self.data = {}
+        self.sites: list[str] = []
+        self.data: dict[str, Any] = {}
+
+    @staticmethod
+    def _extract_site_names(plant_list: list[dict[str, Any]] | None) -> list[str]:
+        sites: list[str] = []
+        if not isinstance(plant_list, list):
+            return sites
+        for site in plant_list:
+            if not isinstance(site, dict):
+                continue
+            site_name = site.get("plantName")
+            if isinstance(site_name, str) and site_name:
+                sites.append(site_name)
+        return sites
 
     async def async_step_user(
         self, user_input: dict[str, Any] | None = None
@@ -142,7 +163,12 @@ class ConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
             _LOGGER.exception("Unexpected exception")
             errors["base"] = "unknown"
         else:
-            self.sites = [site["plantName"] for site in info["plant_list"]]
+            self.sites = self._extract_site_names(info.get("plant_list"))
+            if len(self.sites) == 0:
+                errors["base"] = "no_sites"
+                return self.async_show_form(
+                    step_id="user", data_schema=STEP_USER_DATA_SCHEMA, errors=errors
+                )
             if len(self.sites) == 1:
                 return self.async_create_entry(
                     title=CONF_TITLE,
@@ -256,7 +282,12 @@ class ConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
             _LOGGER.exception("Unexpected exception")
             errors["base"] = "unknown"
         else:
-            self.sites = [site["plantName"] for site in info["plant_list"]]
+            self.sites = self._extract_site_names(info.get("plant_list"))
+            if len(self.sites) == 0:
+                errors["base"] = "no_sites"
+                return self.async_show_form(
+                    step_id="reconfigure", data_schema=STEP_USER_DATA_SCHEMA, errors=errors
+                )
             if len(self.sites) == 1:
                 return self.async_update_reload_and_abort(
                     self._get_reconfigure_entry(),

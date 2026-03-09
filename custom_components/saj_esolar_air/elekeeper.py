@@ -166,6 +166,13 @@ def set_energy_flow_type(plant):
 def prepare_data_for_query( plant, data ):
     """SAJ eSolar Helper Function - A data-t előfeltétellegesen előzik, és a data-t a query-be kell írni."""
 
+    def _first_list_item(value):
+        if isinstance(value, list):
+            for item in value:
+                if item:
+                    return item
+        return None
+
     if plant.get("queryDeviceDataType", 1) == 1:
         added = False
         if len(plant["deviceSnList"]) > 1:
@@ -185,9 +192,17 @@ def prepare_data_for_query( plant, data ):
             data["deviceSn"] = plant["devices"][0]["deviceSn"]
 
     elif plant.get("queryDeviceDataType", 1) == 2:
-        if "moduleSnList" in plant and plant["moduleSnList"] is not None and len(plant["moduleSnList"]) > 0:
-            # if "isInstallMeter" in plant and plant["isInstallMeter"] == 1:
-            data["emsSn"] = plant["moduleSnList"][0]
+        # For EMS/E-Manager based plants the API expects emsSn.
+        ems_sn = _first_list_item(plant.get("emsSnList"))
+        if ems_sn is None:
+            # Some plants expose moduleSnList only; keep this as fallback.
+            ems_sn = _first_list_item(plant.get("moduleSnList"))
+
+        if ems_sn is not None:
+            data["emsSn"] = ems_sn
+        elif "deviceSnList" in plant and isinstance(plant["deviceSnList"], list) and len(plant["deviceSnList"]) > 0:
+            # Last resort: query with deviceSn instead of sending incomplete payload.
+            data["deviceSn"] = plant["deviceSnList"][0]
 
 
 ### other (unused) methods
