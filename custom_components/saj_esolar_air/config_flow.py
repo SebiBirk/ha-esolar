@@ -117,6 +117,7 @@ class ConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
 
     def __init__(self):
         """Set up the the config flow."""
+        super().__init__()
         self.sites = {}
         self.data = {}
 
@@ -290,6 +291,7 @@ class OptionsFlowHandler(config_entries.OptionsFlow):
 
     def __init__(self, config_entry: config_entries.ConfigEntry) -> None:
         """Initialize options flow."""
+        super().__init__()
         self.config_entry = config_entry
 
 
