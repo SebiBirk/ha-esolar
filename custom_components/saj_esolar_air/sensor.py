@@ -145,6 +145,24 @@ def _to_float(value: Any) -> float | None:
         return None
 
 
+def _normalize_grid_power(value: float | None, grid_direction: Any) -> float | None:
+    if value is None:
+        return None
+    direction = _parse_int(grid_direction, {})
+    if direction == 1:
+        # Feed out: represent as negative grid power.
+        return -abs(value)
+    if direction == -1:
+        # Import from grid: represent as positive grid power.
+        return abs(value)
+    return value
+
+
+def _parse_grid_power(value: Any, plant: dict[str, Any]) -> float | None:
+    parsed = _parse_float(value, plant)
+    return _normalize_grid_power(parsed, plant.get("gridDirection"))
+
+
 def _iter_device_statistics(plant: dict[str, Any]):
     for device in plant.get("devices", []):
         if not isinstance(device, dict):
@@ -282,7 +300,11 @@ def _resolve_live_plant_fallback(source: str, plant: dict[str, Any]) -> Any:
     if source == "totalLoadPowerwatt":
         return _sum_device_values(plant, statistics_keys=("totalLoadPowerwatt",))
     if source == "sysGridPowerwatt":
-        return _sum_device_values(plant, statistics_keys=("sysGridPowerwatt",))
+        raw_grid = _sum_device_values(plant, statistics_keys=("sysGridPowerwatt",))
+        grid_direction = plant.get("gridDirection")
+        if grid_direction is None:
+            grid_direction = _first_device_value(plant, ("gridDirection",), _parse_int)
+        return _normalize_grid_power(raw_grid, grid_direction)
     if source == "batPower":
         return _sum_device_values(plant, statistics_keys=("batPower",))
     if source == "backUpLoadPowerwatt":
@@ -350,6 +372,7 @@ PLANT_LIVE_NUMERIC_SENSOR_DEFINITIONS: tuple[dict[str, Any], ...] = (
         "unit": UnitOfPower.WATT,
         "device_class": SensorDeviceClass.POWER,
         "icon": ICON_GRID,
+        "parser": _parse_grid_power,
     },
     {
         "key": "batPower",

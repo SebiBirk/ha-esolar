@@ -322,7 +322,12 @@ class OptionsFlowHandler(config_entries.OptionsFlow):
 
     def __init__(self, config_entry: config_entries.ConfigEntry) -> None:
         """Initialize options flow."""
-        super().__init__()
+        # Home Assistant has changed the OptionsFlow base constructor
+        # signature across versions. Keep compatibility with both variants.
+        try:
+            super().__init__(config_entry)
+        except TypeError:
+            super().__init__()
         self.config_entry = config_entry
 
 
